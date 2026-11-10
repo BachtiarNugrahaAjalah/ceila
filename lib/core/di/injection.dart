@@ -7,6 +7,7 @@ import '../../features/entries/domain/repositories/entries_repository.dart';
 import '../../features/entries/domain/usecases/entry_usecases.dart';
 import '../../features/entries/presentation/bloc/entries_bloc.dart';
 import '../../features/finance/presentation/bloc/finance_bloc.dart';
+import '../../features/overlay/data/overlay_service.dart';
 import '../../features/reminders/data/reminder_service.dart';
 import '../../features/settings/data/settings_repository.dart';
 import '../../features/vehicles/data/repositories/vehicles_repository_impl.dart';
@@ -30,12 +31,11 @@ Future<void> initDependencies() async {
   sl.registerLazySingleton(() => SetTaskDone(sl()));
   sl.registerLazySingleton(() => SettingsRepository());
   sl.registerLazySingleton(() => ReminderService(sl(), sl()));
+  sl.registerLazySingleton(() => OverlayService(sl(), sl(), sl(), sl(), sl()));
   sl.registerLazySingleton<VehiclesRepository>(
     () => VehiclesRepositoryImpl(sl()),
   );
   sl.registerFactory(() => VehicleBloc(sl<AppDatabase>()));
   sl.registerFactory(() => FinanceSummaryBloc(sl<EntriesRepository>()));
-  sl.registerFactory(
-    () => EntriesBloc(sl(), sl(), sl(), sl(), sl(), sl()),
-  );
+  sl.registerFactory(() => EntriesBloc(sl(), sl(), sl(), sl(), sl(), sl()));
 }

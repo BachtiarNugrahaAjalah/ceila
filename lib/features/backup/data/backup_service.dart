@@ -22,7 +22,9 @@ class BackupService {
     };
     final dir = await getTemporaryDirectory();
     final file = File('${dir.path}/ceila-backup.json');
-    await file.writeAsString(const JsonEncoder.withIndent('  ').convert(payload));
+    await file.writeAsString(
+      const JsonEncoder.withIndent('  ').convert(payload),
+    );
     await Share.shareXFiles([XFile(file.path)], text: 'Cadangan Ceila');
     return file.path;
   }

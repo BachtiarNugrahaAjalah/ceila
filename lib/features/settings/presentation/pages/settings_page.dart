@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_overlay_window/flutter_overlay_window.dart';
 import 'package:local_auth/local_auth.dart';
 
 import '../../../../core/di/injection.dart';
 import '../../../backup/data/backup_service.dart';
 import '../../../finance/presentation/pages/finance_page.dart';
+import '../../../overlay/data/overlay_service.dart';
 import '../../../reminders/data/reminder_service.dart';
 import '../../../vehicles/presentation/pages/vehicles_page.dart';
 import '../../data/settings_repository.dart';
@@ -66,27 +68,15 @@ class _SettingsPageState extends State<SettingsPage> {
                 if (v) await sl<ReminderService>().startWatching();
               },
             ),
-            SwitchListTile(
-              title: const Text('Floating icon (overlay)'),
-              subtitle: const Text(
-                'Izin “Tampilkan di atas aplikasi lain” diperlukan.',
+            if (OverlayService.isPlatformSupported)
+              SwitchListTile(
+                title: const Text('Floating icon (overlay)'),
+                subtitle: const Text(
+                  'Izin “Tampilkan di atas aplikasi lain” diperlukan.',
+                ),
+                value: _overlay,
+                onChanged: _setOverlayEnabled,
               ),
-              value: _overlay,
-              onChanged: (v) async {
-                if (v) {
-                  final granted =
-                      await FlutterOverlayWindow.isPermissionGranted();
-                  if (!granted) await FlutterOverlayWindow.requestPermission();
-                }
-                await _settings.setOverlayEnabled(v);
-                setState(() => _overlay = v);
-              },
-            ),
-            ListTile(
-              title: const Text('Minta izin overlay'),
-              leading: const Icon(Icons.layers_outlined),
-              onTap: () async => FlutterOverlayWindow.requestPermission(),
-            ),
             SwitchListTile(
               title: const Text('Kunci aplikasi'),
               subtitle: const Text('Gunakan biometrik/PIN perangkat.'),
@@ -150,5 +140,45 @@ class _SettingsPageState extends State<SettingsPage> {
         ],
       ),
     );
+  }
+
+  Future<void> _setOverlayEnabled(bool enabled) async {
+    try {
+      if (enabled) {
+        var permissionGranted =
+            await FlutterOverlayWindow.isPermissionGranted();
+        if (!permissionGranted) {
+          await FlutterOverlayWindow.requestPermission();
+          permissionGranted = await FlutterOverlayWindow.isPermissionGranted();
+        }
+        if (!permissionGranted) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Izin tampil di atas aplikasi belum diberikan.'),
+              ),
+            );
+          }
+          return;
+        }
+        await sl<OverlayService>().show();
+      } else {
+        await sl<OverlayService>().stop();
+      }
+
+      await _settings.setOverlayEnabled(enabled);
+      if (mounted) setState(() => _overlay = enabled);
+    } on PlatformException catch (error) {
+      debugPrint('Overlay action failed: $error');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Floating icon gagal dimulai. Periksa izin overlay dan aktivitas latar belakang Ceila.',
+            ),
+          ),
+        );
+      }
+    }
   }
 }
