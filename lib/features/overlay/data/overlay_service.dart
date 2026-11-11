@@ -12,6 +12,8 @@ import '../../reminders/data/reminder_service.dart';
 import '../../settings/data/settings_repository.dart';
 
 class OverlayService {
+  static const _bridgeChannel = MethodChannel('ceila/overlay_bridge');
+
   static bool get isPlatformSupported =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
 
@@ -32,8 +34,11 @@ class OverlayService {
 
   Future<void> start() async {
     if (!isPlatformSupported) return;
+    await _bridgeChannel.invokeMethod<void>('restoreHostMessenger');
     _subscription ??= FlutterOverlayWindow.overlayListener.listen(
-      (message) => unawaited(_handleMessage(message)),
+      (message) {
+        unawaited(_handleMessage(message));
+      },
       onError: (Object error, StackTrace stackTrace) {
         FlutterError.reportError(
           FlutterErrorDetails(exception: error, stack: stackTrace),
@@ -82,7 +87,7 @@ class OverlayService {
       overlayTitle: 'Ceila aktif',
       overlayContent: 'Ketuk untuk mencatat dengan cepat',
       enableDrag: true,
-      positionGravity: PositionGravity.auto,
+      positionGravity: PositionGravity.none,
       startPosition: const OverlayPosition(0, 0),
     );
     var started = false;

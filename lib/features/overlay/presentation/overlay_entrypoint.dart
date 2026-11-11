@@ -17,6 +17,7 @@ class QuickAddOverlay extends StatefulWidget {
 
 class _QuickAddOverlayState extends State<QuickAddOverlay> {
   static const _bubbleSize = 76;
+  static const _overlayChannel = MethodChannel('x-slayer/overlay');
 
   final _form = GlobalKey<FormState>();
   final _title = TextEditingController();
@@ -30,10 +31,13 @@ class _QuickAddOverlayState extends State<QuickAddOverlay> {
   _OverlayPage _page = _OverlayPage.bubble;
   bool _sending = false;
   bool _loadingTasks = false;
+  bool _transitioning = false;
   String? _status;
+  Timer? _responseTimeout;
   List<_OverlayTask> _tasks = const [];
   double? _screenWidth;
   double? _screenHeight;
+  OverlayPosition? _bubblePosition;
   StreamSubscription<dynamic>? _messages;
 
   @override
@@ -45,6 +49,7 @@ class _QuickAddOverlayState extends State<QuickAddOverlay> {
   @override
   void dispose() {
     _messages?.cancel();
+    _responseTimeout?.cancel();
     _title.dispose();
     _amount.dispose();
     _category.dispose();
@@ -56,6 +61,8 @@ class _QuickAddOverlayState extends State<QuickAddOverlay> {
 
   @override
   Widget build(BuildContext context) {
+    if (_transitioning) return const SizedBox.expand();
+
     if (_page == _OverlayPage.bubble) {
       return Material(
         color: Colors.transparent,
@@ -73,8 +80,7 @@ class _QuickAddOverlayState extends State<QuickAddOverlay> {
             onTap: _closeToBubble,
             child: const ColoredBox(color: Color(0x33000000)),
           ),
-          Align(
-            alignment: Alignment.bottomRight,
+          Center(
             child: Padding(
               padding: const EdgeInsets.all(12),
               child: GestureDetector(
@@ -158,10 +164,7 @@ class _QuickAddOverlayState extends State<QuickAddOverlay> {
             ListTile(
               leading: const Icon(Icons.add_circle_outline),
               title: const Text('Quick-add'),
-              onTap: () => setState(() {
-                _page = _OverlayPage.quickAdd;
-                _status = null;
-              }),
+              onTap: _openQuickAdd,
             ),
             ListTile(
               leading: const Icon(Icons.checklist),
@@ -199,7 +202,7 @@ class _QuickAddOverlayState extends State<QuickAddOverlay> {
                   ),
                   IconButton(
                     tooltip: 'Kembali ke menu',
-                    onPressed: () => setState(() => _page = _OverlayPage.menu),
+                    onPressed: _backToMenu,
                     icon: const Icon(Icons.arrow_back),
                   ),
                 ],
@@ -313,7 +316,7 @@ class _QuickAddOverlayState extends State<QuickAddOverlay> {
                 ),
                 IconButton(
                   tooltip: 'Kembali ke menu',
-                  onPressed: () => setState(() => _page = _OverlayPage.menu),
+                  onPressed: _backToMenu,
                   icon: const Icon(Icons.arrow_back),
                 ),
               ],
@@ -363,37 +366,103 @@ class _QuickAddOverlayState extends State<QuickAddOverlay> {
   }
 
   Future<void> _openMenu() async {
+    if (_transitioning) return;
     final width = _screenWidth;
     final height = _screenHeight;
     if (width == null || height == null) return;
-    await FlutterOverlayWindow.resizeOverlay(
-      width.round(),
-      height.round(),
-      false,
-    );
+    setState(() => _transitioning = true);
+    try {
+      _bubblePosition = await FlutterOverlayWindow.getOverlayPosition();
+      await _moveOverlay(const OverlayPosition(0, 0));
+      await FlutterOverlayWindow.resizeOverlay(
+        width.round(),
+        height.round(),
+        false,
+      );
+      await FlutterOverlayWindow.updateFlag(OverlayFlag.defaultFlag);
+      if (!mounted) return;
+      setState(() {
+        _page = _OverlayPage.menu;
+        _transitioning = false;
+      });
+    } finally {
+      if (mounted && _transitioning) {
+        setState(() => _transitioning = false);
+      }
+    }
+  }
+
+  Future<void> _openQuickAdd() async {
     await FlutterOverlayWindow.updateFlag(OverlayFlag.focusPointer);
+    if (!mounted) return;
+    setState(() {
+      _page = _OverlayPage.quickAdd;
+      _status = null;
+    });
+  }
+
+  Future<void> _backToMenu() async {
+    FocusManager.instance.primaryFocus?.unfocus();
+    await FlutterOverlayWindow.updateFlag(OverlayFlag.defaultFlag);
     if (!mounted) return;
     setState(() => _page = _OverlayPage.menu);
   }
 
   Future<void> _closeToBubble() async {
+    if (_transitioning) return;
+    setState(() => _transitioning = true);
     FocusManager.instance.primaryFocus?.unfocus();
-    await FlutterOverlayWindow.updateFlag(OverlayFlag.defaultFlag);
-    if (!mounted) return;
-    setState(() => _page = _OverlayPage.bubble);
-    await FlutterOverlayWindow.resizeOverlay(_bubbleSize, _bubbleSize, true);
+    try {
+      await FlutterOverlayWindow.updateFlag(OverlayFlag.defaultFlag);
+      await FlutterOverlayWindow.resizeOverlay(_bubbleSize, _bubbleSize, true);
+      final position = _bubblePosition;
+      if (position != null) {
+        await _moveOverlay(position);
+      }
+      if (!mounted) return;
+      setState(() {
+        _page = _OverlayPage.bubble;
+        _transitioning = false;
+      });
+    } finally {
+      if (mounted && _transitioning) {
+        setState(() => _transitioning = false);
+      }
+    }
+  }
+
+  Future<void> _moveOverlay(OverlayPosition position) async {
+    final moved = await _overlayChannel.invokeMethod<bool>(
+      'updateOverlayPosition',
+      {'x': position.x.toInt(), 'y': position.y.toInt()},
+    );
+    if (moved != true) {
+      throw PlatformException(
+        code: 'OVERLAY_MOVE_FAILED',
+        message: 'Android could not update the overlay position.',
+      );
+    }
   }
 
   Future<void> _openTasks() async {
+    _responseTimeout?.cancel();
     setState(() {
       _page = _OverlayPage.tasks;
       _loadingTasks = true;
       _tasks = const [];
       _status = null;
     });
+    _responseTimeout = Timer(const Duration(seconds: 10), () {
+      if (!mounted || !_loadingTasks) return;
+      setState(() {
+        _loadingTasks = false;
+        _status = 'Daftar tugas tidak dapat dimuat.';
+      });
+    });
     try {
       await FlutterOverlayWindow.shareData({'action': 'load_open_tasks'});
     } on PlatformException {
+      _responseTimeout?.cancel();
       if (!mounted) return;
       setState(() {
         _loadingTasks = false;
@@ -403,12 +472,18 @@ class _QuickAddOverlayState extends State<QuickAddOverlay> {
   }
 
   Future<void> _completeTask(int id) async {
+    _responseTimeout?.cancel();
+    _responseTimeout = Timer(const Duration(seconds: 10), () {
+      if (!mounted) return;
+      setState(() => _status = 'Tugas gagal diperbarui.');
+    });
     try {
       await FlutterOverlayWindow.shareData({
         'action': 'complete_task',
         'id': id,
       });
     } on PlatformException {
+      _responseTimeout?.cancel();
       if (!mounted) return;
       setState(() => _status = 'Tugas gagal diperbarui.');
     }
@@ -445,9 +520,17 @@ class _QuickAddOverlayState extends State<QuickAddOverlay> {
 
   Future<void> _submit() async {
     if (!_form.currentState!.validate()) return;
+    _responseTimeout?.cancel();
     setState(() {
       _sending = true;
       _status = null;
+    });
+    _responseTimeout = Timer(const Duration(seconds: 10), () {
+      if (!mounted || !_sending) return;
+      setState(() {
+        _sending = false;
+        _status = 'Catatan tidak dapat disimpan. Coba lagi.';
+      });
     });
     await FlutterOverlayWindow.shareData({
       'action': 'add_entry',
@@ -486,6 +569,7 @@ class _QuickAddOverlayState extends State<QuickAddOverlay> {
         });
         return;
       case 'entry_result':
+        _responseTimeout?.cancel();
         final success = message['success'] == true;
         if (!mounted) return;
         setState(() {
@@ -495,6 +579,7 @@ class _QuickAddOverlayState extends State<QuickAddOverlay> {
         if (success) _clearForm();
         return;
       case 'task_result':
+        _responseTimeout?.cancel();
         if (!mounted) return;
         setState(
           () => _status = message['success'] == true
@@ -503,6 +588,7 @@ class _QuickAddOverlayState extends State<QuickAddOverlay> {
         );
         return;
       case 'open_tasks':
+        _responseTimeout?.cancel();
         final items = message['items'];
         if (!mounted || items is! List) return;
         setState(() {
@@ -524,6 +610,7 @@ class _QuickAddOverlayState extends State<QuickAddOverlay> {
         });
         return;
       case 'open_tasks_error':
+        _responseTimeout?.cancel();
         if (!mounted) return;
         setState(() {
           _loadingTasks = false;
